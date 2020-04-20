@@ -1,37 +1,34 @@
 import const
 import dbwork
+import excelwork
 import pyowm
 import logging
-import geopy
+import xlrd
+import asyncio
+from geopy import distance
+from geopy.distance import lonlat, distance, geodesic, vincenty
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import ReplyKeyboardRemove, ReplyKeyboardMarkup, \
-    KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+    KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, venue
 from aiogram.bot import api
 
-"""
-1) по гео.позиц выдовать ближ. здание 
-+ 2) добить клавиатуру 
-+ 3) добить по возможности измен. по текста из телеги
-+ 4) добавить вкладку новостей 
-5) рядом с музеями выдовать инфомацию о выстовках  
-"""
-owm = pyowm.OWM(const.key_Token_open_weather)
 
+owm = pyowm.OWM(const.key_Token_open_weather)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PATCHED_URL = "https://telegg.ru/orig/bot{token}/{method}"
 setattr(api, 'API_URL', PATCHED_URL)
 
-# Создать глобального бота
-bot = Bot(token=const.key_Token, )
-dp = Dispatcher(bot=bot, )
+loop = asyncio.get_event_loop()
+bot = Bot(token=const.key_Token, parse_mode="HTML")
+dp = Dispatcher(bot=bot, loop=loop)
 
 button_news = KeyboardButton('Новости 💬')
 button_location = KeyboardButton('Отправить свою локацию 🗺️', request_location=True)
 button_weather = KeyboardButton("Погода 🌤")
 markup_first = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-markup_first.add(button_news,button_weather, button_location)
+markup_first.add(button_news, button_weather, button_location)
 
 inline_button_exhibitions = InlineKeyboardButton("Выставки", callback_data="exhibitions")
 inline_button_activity = InlineKeyboardButton("Мероприятия", callback_data="activity")
@@ -40,28 +37,28 @@ inline_markup_first = InlineKeyboardMarkup(row_width=2)
 inline_markup_first.add(inline_button_exhibitions, inline_button_activity, inline_button_stock)
 
 
-@dp.callback_query_handler(lambda abc: abc.data == "exhibitions")
+@dp.callback_query_handler(lambda qwer: qwer.data == "exhibitions")
 async def work_answer_exhibitions(callback_query: types.CallbackQuery):
     info_name = "Выставки"
     work_db = dbwork.DATABase()
     messages = work_db.data_info_return(info_name)
-    await bot.send_message(callback_query.from_user.id,messages)
+    await bot.send_message(callback_query.from_user.id, messages)
 
 
-@dp.callback_query_handler(lambda abc: abc.data == "activity")
+@dp.callback_query_handler(lambda qwer: qwer.data == "activity")
 async def work_answer_activity(callback_query: types.CallbackQuery):
     info_name = "Мероприятия"
     work_db = dbwork.DATABase()
     messages = work_db.data_info_return(info_name)
-    await bot.send_message(callback_query.from_user.id,messages)
+    await bot.send_message(callback_query.from_user.id, messages)
 
 
-@dp.callback_query_handler(lambda abc: abc.data == "stock")
+@dp.callback_query_handler(lambda qwer: qwer.data == "stock")
 async def work_answer_exhibitions(callback_query: types.CallbackQuery):
     info_name = "Акции"
     work_db = dbwork.DATABase()
     messages = work_db.data_info_return(info_name)
-    await bot.send_message(callback_query.from_user.id,messages)
+    await bot.send_message(callback_query.from_user.id, messages)
 
 
 @dp.message_handler(lambda message: 'Новости 💬' == message.text)
@@ -74,15 +71,13 @@ async def work_answer_news(message: types.message):
 
 @dp.message_handler(lambda message: 'Погода 🌤' == message.text)
 async def work_weather(message: types.message):
-
     observation = owm.weather_at_place('Moscow, RU')
     w = observation.get_weather()
-    weather_wind = w.get_wind()
     weather_temp = w.get_temperature('celsius')['temp']
     weather_temp_max = w.get_temperature('celsius')['temp_max']
     weather_temp_min = w.get_temperature('celsius')['temp_min']
-    weather_answer = ("""В Москве сейчас {}℃ (mаx={}℃ min={}℃)
-    Ветер {} """.format(weather_temp, weather_temp_max, weather_temp_min, weather_wind))
+    weather_answer = (
+        """В Москве сейчас {}℃ (mаx={}℃ min={}℃)""".format(weather_temp, weather_temp_max, weather_temp_min))
     await message.reply(weather_answer, reply=False)
 
 
@@ -99,7 +94,7 @@ async def send_welcome(message: types.Message):
     # await message.reply("Убираем шаблоны сообщений", reply_markup=ReplyKeyboardRemove())
     work_db = dbwork.DATABase()
     work_db.data_add_new_person()
-    # await send_menu(message=message)
+
 
 
 @dp.message_handler(commands=['help'])
@@ -114,8 +109,6 @@ async def send_menu(message: types.Message):
         
         Хотите оставить фидбек
         — Начните сообщение со слова "Админ".
-        Например: "Админ, где центр мира?"
-        Ps. центр мира находится на Горьковском направлении 
         
         Что я умею:
         >>>>>>>>>>>
@@ -127,7 +120,22 @@ async def send_menu(message: types.Message):
 async def work_admin(message: types.Message):
     user = types.User.get_current()
     if user.id == const.admin_id:
-        await message.reply("информация о командах ", reply=False)
+        await message.reply("info ", reply=False)
+
+
+@dp.message_handler(lambda message: True, content_types=['location'])
+async def work_location(message: types.Message):
+    lon = message.location.longitude
+    lat = message.location.latitude
+    user_local = (lat, lon)
+    workexcel = excelwork.Excel()
+    index = workexcel.distance_calculation(user_local)
+    print(index)
+    await message.reply("Рядом с вами: {}".format(workexcel.common_name[index]), reply=False)
+    await message.answer_venue(latitude=workexcel.array_lat[index],
+                               longitude=workexcel.array_lon[index],
+                               title=workexcel.category[index],
+                               address=workexcel.common_name[index])
 
 
 @dp.message_handler(content_types=types.ContentType.TEXT)
@@ -172,8 +180,12 @@ async def work_echo(message: types.Message):
         await message.reply("{} такой команды нет".format(text), reply=False)
 
 
+async def send_admin_startup(dp):
+    await bot.send_message(chat_id=const.admin_id, text="Бот запущен")
+
+
 def main():
-    executor.start_polling(dispatcher=dp)
+    executor.start_polling(dispatcher=dp, skip_updates= True, on_startup=send_admin_startup)
 
 
 if __name__ == '__main__':

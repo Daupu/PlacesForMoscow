@@ -1,3 +1,3 @@
-key_Token = 1
-key_Token_open_weather = 1
-admin_id = 1
+key_Token =
+key_Token_open_weather =
+admin_id =
